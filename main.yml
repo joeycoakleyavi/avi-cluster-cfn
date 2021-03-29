@@ -1,0 +1,630 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: CloudFormation Template to Create an Avi Cluster
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  InstanceType:
+    Description: Avi Controller instance type
+    Type: String
+    Default: m5.2xlarge
+    AllowedValues:
+      - m5.4xlarge
+      - m5.2xlarge
+      - m4.xlarge
+      - m4.2xlarge
+      - m4.4xlarge
+      - m4.10xlarge
+      - m3.xlarge
+      - m3.2xlarge
+      - c4.large
+      - c4.xlarge
+      - c4.2xlarge
+      - c4.4xlarge
+      - c4.8xlarge
+    ConstraintDescription: must be a valid EC2 instance type.
+  AviVantageVersion:
+    Description: The version of Avi Vantage
+    Type: String
+    Default: 20.1.2
+    AllowedValues:
+      - 20.1.2
+      - 20.1.3
+      - 20.1.4
+    ConstraintDescription: Must be a valid Avi Vantage version
+  VpcId:
+    Description: The VPC in which the controller cluster will be deployed
+    Type: 'AWS::EC2::VPC::Id'
+  SubnetId:
+    Description: Which subnet(s) the controller cluster will be deployed to.
+    Type: 'AWS::EC2::Subnet::Id'
+  AviPassword:
+    Description: Password for the Avi Controller
+    Type: String
+    Default: Avi123!@#
+    NoEcho: True
+  S3BucketName:
+    Description: Name of the S3 bucket which contains deployment code
+    Type: String
+    Default: jcoakley-bucket
+  S3Key:
+    Description: Name of the zipfile in the S3 bucket
+    Type: String
+    Default: deploy.zip
+
+
+# Mappings: 
+
+# Conditions: 
+
+Resources: 
+  AviControllerLT:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub AviControllerLT-${AWS::StackName}
+      LaunchTemplateData: 
+        IamInstanceProfile: 
+          Arn: !GetAtt AviControllerInstanceProfile.Arn
+        ImageId: ami-0ca5d1b0c6e2ef1f8
+        KeyName: !Ref KeyName
+        InstanceType: !Ref InstanceType
+        NetworkInterfaces:
+          - Groups:
+              - !Ref InstanceSecurityGroup
+            AssociatePublicIpAddress: true
+            DeviceIndex: 0
+            DeleteOnTermination: true
+            SubnetId: !Ref SubnetId
+        UserData:
+          'Fn::Base64':
+            'Fn::Sub': |
+                {
+                "SystemConfiguration":[
+                  {
+                    "url":"/api/systemconfiguration",
+                    "uuid":"default",
+                    "email_configuration":{
+                      "from_email":"admin@avicontroller.net",
+                      "mail_server_port":25,
+                      "smtp_type":"SMTP_NONE",
+                      "mail_server_name":"localhost"
+                    },
+                    "global_tenant_config":{
+                      "se_in_provider_context":true,
+                      "tenant_access_to_provider_se":true,
+                      "tenant_vrf":false
+                    },
+                    "dns_configuration":{
+                      "search_domain":"",
+                      "server_list":[
+                        {
+                          "type":"V4",
+                          "addr":"8.8.8.8"
+                        }
+                      ]
+                    },
+                    "tech_support_uploader_configuration":{
+                      "auto_upload":false
+                    },
+                    "docker_mode":false,
+                    "welcome_workflow_complete": true, 
+                    "portal_configuration":{
+                      "redirect_to_https":true,
+                      "enable_https":true,
+                      "enable_http":true
+                    },
+                    "ntp_configuration":{
+                      "ntp_server_list":[
+                        {
+                          "type":"DNS",
+                          "addr":"0.us.pool.ntp.org"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "META":{
+                  "upgrade_mode":true,
+                  "version":{
+                      "Version":"${AviVantageVersion}"
+                  }
+                },
+                "InitialConfiguration":[
+                  {
+                    "user_initial_setup":false,
+                    "setup_failed": false
+                  }
+                ],
+                "Tenant":[
+                  {
+                    "uuid":"admin",
+                    "name":"admin"
+                  }
+                ],
+                "User": [
+                  {
+                      "username": "admin",
+                      "user_profile_ref": "/api/useraccountprofile/?name=Default-User-Account-Profile",
+                      "name": "admin",
+                      "is_active": true,
+                      "access": [
+                          {
+                              "all_tenants": false,
+                              "tenant_ref": "/api/tenant/?name=admin",
+                              "role_ref": "/api/role/?tenant=admin&name=System-Admin"
+                          }
+                      ],
+                      "is_superuser": true,
+                      "full_name": "System Administrator",
+                      "uid": 2000,
+                      "password": "${AviPassword}",
+                      "local": true,
+                      "email": "",
+                      "default_tenant_ref": "/api/tenant/?name=admin"
+                  }
+                ]
+                }
+
+  AviController1:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AviControllerLT
+        Version: "1"
+      Tags:
+        - Key: Name
+          Value: AviController1
+
+  AviController2:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AviControllerLT
+        Version: "1"
+      Tags:
+        - Key: Name
+          Value: AviController2
+
+  AviController3:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AviControllerLT
+        Version: "1"
+      Tags:
+        - Key: Name
+          Value: AviController3
+
+
+  AviControllerRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sts:AssumeRole'
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+                - lambda.amazonaws.com
+
+  # VMimportRole:
+  #   Type: 'AWS::IAM::Role'
+  #   Properties:
+  #     RoleName: vmimport
+  #     Path: /
+  #     AssumeRolePolicyDocument:
+  #       Version: 2012-10-17
+  #       Statement:
+  #       - Effect: Allow
+  #         Principal:
+  #           Service: vmie.amazonaws.com
+  #         Action: sts:AssumeRole
+  #         Condition:
+  #           StringEquals:
+  #             sts:ExternalId: vmimport
+
+  # VMimportPolicy:
+  #   Type: 'AWS::IAM::Policy'
+  #   Properties:
+  #     PolicyName: VmimportPolicy
+  #     PolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #       - Effect: Allow
+  #         Action:
+  #         - s3:ListBucket
+  #         - s3:GetBucketLocation
+  #         Resource: "*"
+  #       - Effect: Allow
+  #         Action:
+  #         - s3:GetObject
+  #         Resource: "*"
+  #       - Effect: Allow
+  #         Action:
+  #         - ec2:ModifySnapshotAttribute
+  #         - ec2:CopySnapshot
+  #         - ec2:RegisterImage
+  #         - ec2:Describe*
+  #         Resource: "*"
+  #     Roles:
+  #       - !Ref VMimportRole
+
+  AviControllerEC2Policy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: AviControllerEC2Policy
+      PolicyDocument:
+        Statement:
+          - Sid: Stmt1450393199000
+            Effect: Allow
+            Action:
+              - 'ec2:AllocateAddress'
+              - 'ec2:AssignPrivateIpAddresses'
+              - 'ec2:AssociateAddress'
+              - 'ec2:AttachNetworkInterface'
+              - 'ec2:AttachVolume'
+              - 'ec2:AuthorizeSecurityGroupEgress'
+              - 'ec2:AuthorizeSecurityGroupIngress'
+              - 'ec2:CancelConversionTask'
+              - 'ec2:CancelImportTask'
+              - 'ec2:CreateNetworkInterface'
+              - 'ec2:CreateSecurityGroup'
+              - 'ec2:CreateSnapshot'
+              - 'ec2:CreateTags'
+              - 'ec2:CreateVolume'
+              - 'ec2:DeleteNetworkInterface'
+              - 'ec2:DeleteSecurityGroup'
+              - 'ec2:DeleteSnapshot'
+              - 'ec2:DeleteTags'
+              - 'ec2:DeleteVolume'
+              - 'ec2:DeregisterImage'
+              - 'ec2:DescribeAddresses'
+              - 'ec2:DescribeAvailabilityZones'
+              - 'ec2:DescribeConversionTasks'
+              - 'ec2:DescribeImageAttribute'
+              - 'ec2:DescribeImages'
+              - 'ec2:DescribeImportSnapshotTasks'
+              - 'ec2:DescribeInstanceAttribute'
+              - 'ec2:DescribeInstanceStatus'
+              - 'ec2:DescribeInstances'
+              - 'ec2:DescribeInternetGateways'
+              - 'ec2:DescribeNetworkAcls'
+              - 'ec2:DescribeNetworkInterfaceAttribute'
+              - 'ec2:DescribeNetworkInterfaces'
+              - 'ec2:DescribeRegions'
+              - 'ec2:DescribeRouteTables'
+              - 'ec2:DescribeSecurityGroups'
+              - 'ec2:DescribeSnapshotAttribute'
+              - 'ec2:DescribeSnapshots'
+              - 'ec2:DescribeSubnets'
+              - 'ec2:DescribeTags'
+              - 'ec2:DescribeVolumeAttribute'
+              - 'ec2:DescribeVolumeStatus'
+              - 'ec2:DescribeVolumes'
+              - 'ec2:DescribeVpcAttribute'
+              - 'ec2:DescribeVpcs'
+              - 'ec2:DetachNetworkInterface'
+              - 'ec2:DetachVolume'
+              - 'ec2:DisassociateAddress'
+              - 'ec2:GetConsoleOutput'
+              - 'ec2:ImportSnapshot'
+              - 'ec2:ImportVolume'
+              - 'ec2:ModifyImageAttribute'
+              - 'ec2:ModifyInstanceAttribute'
+              - 'ec2:ModifyNetworkInterfaceAttribute'
+              - 'ec2:ModifySnapshotAttribute'
+              - 'ec2:ModifyVolumeAttribute'
+              - 'ec2:RebootInstances'
+              - 'ec2:RegisterImage'
+              - 'ec2:ReleaseAddress'
+              - 'ec2:ResetImageAttribute'
+              - 'ec2:ResetInstanceAttribute'
+              - 'ec2:ResetNetworkInterfaceAttribute'
+              - 'ec2:ResetSnapshotAttribute'
+              - 'ec2:RevokeSecurityGroupEgress'
+              - 'ec2:RevokeSecurityGroupIngress'
+              - 'ec2:RunInstances'
+              - 'ec2:StartInstances'
+              - 'ec2:StopInstances'
+              - 'ec2:TerminateInstances'
+              - 'ec2:UnassignPrivateIpAddresses'
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource: '*'
+      Roles:
+        - !Ref AviControllerRole
+  AviControllerS3Policy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: AviControllerS3Policy
+      PolicyDocument:
+        Statement:
+          - Sid: Stmt1450394113000
+            Effect: Allow
+            Action:
+              - 's3:AbortMultipartUpload'
+              - 's3:CreateBucket'
+              - 's3:DeleteBucket'
+              - 's3:DeleteObject'
+              - 's3:GetBucketLocation'
+              - 's3:GetBucketTagging'
+              - 's3:GetObject'
+              - 's3:ListAllMyBuckets'
+              - 's3:ListBucket'
+              - 's3:ListBucketMultipartUploads'
+              - 's3:ListMultipartUploadParts'
+              - 's3:PutBucketTagging'
+              - 's3:PutObject'
+            Resource:
+              - '*'
+      Roles:
+        - !Ref AviControllerRole
+  AviControllerInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref AviControllerRole
+
+  LambdaExecutionPolicyCallStateMachine:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Path: "/"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: states
+            Effect: Allow
+            Action: [
+              'states:StartExecution',
+              'states:DescribeExecution'
+            ]
+            Resource: '*'
+          - Sid: log
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+
+  LambdaExecutionRoleCallStateMachine:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      ManagedPolicyArns: [
+        !Ref LambdaExecutionPolicyCallStateMachine
+      ]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+      Path: /
+
+  LambdaExecutionRoleConfigureCluster:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      ManagedPolicyArns: [
+        arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      ]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+      Path: /
+
+  LambdaCallStateMachine:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Handler: index.lambda_handler
+      FunctionName: !Sub CallStateMachine-${AWS::StackName}
+      Environment:
+        Variables:
+          statemachineARN : !GetAtt StateMachine.Arn
+      Role: !Sub ${LambdaExecutionRoleCallStateMachine.Arn}
+      Code:
+        ZipFile: |
+          from botocore.exceptions import ClientError
+          import boto3
+          import cfnresponse
+          import os
+          import json
+          statemachineARN = os.getenv('statemachineARN')
+          def lambda_handler(event, context):
+              print("Received Event:")
+              print(event)
+              print(statemachineARN)
+              sfn_client = boto3.client('stepfunctions')
+              try:
+                  if event['RequestType'] == 'Delete':
+                    print("Delete Event Requested")
+                    cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  response = sfn_client.start_execution(stateMachineArn=statemachineARN,input=(json.dumps(event)))
+                  sfn_arn = response.get('executionArn')
+                  print(sfn_arn)
+              except Exception:
+                  print('Could not run the Step Function')
+                  responseData = {}
+                  responseData['Error'] = "CouldNotCallStateMachine"
+                  response=cfnresponse.send(event, context, cfnresponse.FAILED, responseData)
+                  return(response)
+              return(sfn_arn)
+      Runtime: "python2.7"
+      Timeout: 25
+    
+  NotifyCFN:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Handler: index.lambda_handler
+      FunctionName: !Sub NotifyCFN-${AWS::StackName}
+      Role: !Sub ${LambdaExecutionRoleCallStateMachine.Arn}
+      Code:
+        ZipFile: |
+          from botocore.exceptions import ClientError
+          import boto3
+          import cfnresponse
+          import json
+          def lambda_handler(event, context):
+              print("Received Event:")
+              print(event)
+              try:
+                  if event.get('error'):
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {})
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+      Runtime: "python2.7"
+      Timeout: 25
+
+  StateMachine:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      DefinitionString: !Sub
+        |-
+          {
+              "Comment": "Configure Cluster",
+              "StartAt": "ConfigureCluster",
+              "States": {
+                  "ConfigureCluster": {
+                      "Type": "Task",
+                      "Resource": "${ConfigureClusterLambda.Arn}",
+                      "Retry": [
+                          {
+                              "ErrorEquals": ["States.ALL"],
+                              "IntervalSeconds": 120,
+                              "MaxAttempts": 8
+                          }
+                      ],
+                      "Catch": [
+                          {
+                              "ErrorEquals": ["States.ALL"],
+                              "ResultPath": "$.error",
+                              "Next": "NotifyCFN"
+                          }
+                      ],
+                      "Next": "NotifyCFN"
+                  },
+                  "NotifyCFN": {
+                      "Type": "Task",
+                      "Resource": "${NotifyCFN.Arn}",
+                      "End": true
+                  }
+              }
+          }
+      RoleArn: !GetAtt StateMachineRole.Arn
+
+  ConfigureClusterLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Configures Avi Controller Cluster
+      FunctionName: !Sub ConfigureCluster-${AWS::StackName}
+      Handler: lambda_function.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt LambdaExecutionRoleConfigureCluster.Arn
+      Runtime: python3.6
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Ref S3Key
+      Environment:
+        Variables:
+          AVIPASSWORD: !Ref AviPassword
+          APIVERSION: !Ref AviVantageVersion
+
+  StateMachineRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Sub states.${AWS::Region}.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: StatesExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource: "*"
+
+  CallStateMachineCustom:
+    Type: 'Custom::CustomResource'
+    Properties:
+      ServiceToken: !GetAtt LambdaCallStateMachine.Arn
+      Nodes:
+        Ctl1:
+          PrivateIp: !GetAtt AviController1.PrivateIp
+          PublicIp: !GetAtt AviController1.PublicIp
+        Ctl2:
+          PrivateIp: !GetAtt AviController2.PrivateIp
+          PublicIp: !GetAtt AviController2.PublicIp
+        Ctl3:
+          PrivateIp: !GetAtt AviController3.PrivateIp
+          PublicIp: !GetAtt AviController3.PublicIp
+
+  InstanceSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable SSH access via port 22
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8443
+          ToPort: 8443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: udp
+          FromPort: 123
+          ToPort: 123
+          CidrIp: 0.0.0.0/0
+
+
+Outputs:
+  CTL1PrivateIP:
+    Description: Public IP of the Controller
+    Value: !GetAtt AviController1.PrivateIp
+  CTL2PrivateIP:
+    Description: Public IP of the Controller
+    Value: !GetAtt AviController2.PrivateIp
+  CTL3PrivateIP:
+    Description: Public IP of the Controller
+    Value: !GetAtt AviController3.PrivateIp
+  CTL1PublicIP:
+    Description: Public IP of the Controller
+    Value: !GetAtt AviController1.PublicIp
+  CTL2PublicIP:
+    Description: Public IP of the Controller
+    Value: !GetAtt AviController2.PublicIp
+  CTL3PublicIP:
+    Description: Public IP of the Controller
+    Value: !GetAtt AviController3.PublicIp
