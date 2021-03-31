@@ -7,7 +7,7 @@ def ready_check(nodes:dict, password:str, api_version:str):
     result = []
     for node, ip in nodes.items():
         try:
-            api = ApiSession(ip['PublicIp'], 'admin', password, tenant="admin", api_version=api_version)
+            api = ApiSession(ip['PrivateIp'], 'admin', password, tenant="admin", api_version=api_version)
             if api.get('cluster').status_code == 200:
                 result.append(node)
         except:
@@ -56,7 +56,7 @@ def lambda_handler(event, context):
         print("Beginning Cluster Configuration")
         if ready_check(nodes, avi_password, api_version):
             print("Ready Check: Passed!")
-            api = ApiSession(nodes['Ctl1']['PublicIp'], 'admin', avi_password, tenant='admin', api_version=api_version)
+            api = ApiSession(nodes['Ctl1']['PrivateIp'], 'admin', avi_password, tenant='admin', api_version=api_version)
             resp = api.put('cluster', data=data)
             if resp.status_code == 200:
                 return(event)
