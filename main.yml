@@ -89,6 +89,8 @@ Mappings:
       "2014": ami-0c91bac459416082e
     ap-southeast-1:
       "2014": ami-03d56278f53a1db5c
+    ap-southeast-2:
+      "2014": ami-0bc337bbf06c676b3
 
   VersionMap:
     20.1.4:
