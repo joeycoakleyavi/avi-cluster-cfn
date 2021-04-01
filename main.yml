@@ -35,7 +35,7 @@ Parameters:
     Description: The VPC in which the controller cluster will be deployed
     Type: 'AWS::EC2::VPC::Id'
   SubnetId:
-    Description: Which subnet(s) the controller cluster will be deployed to.
+    Description: Which subnet the controller cluster will be deployed to.
     Type: 'AWS::EC2::Subnet::Id'
   AviPassword:
     Description: Password for the Avi Controller
@@ -59,7 +59,13 @@ Parameters:
     Type: String
     AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|1[0-9]|2[0-9]|3[0-2]))$
     ConstraintDescription: CIDR block parameter must be in the form x.x.x.x/0-32.
-
+  CreateVMImportExport:
+    Description: Should this template create the VMImport Role? Select True if this is the first Avi AWS deployment.
+    Type: String
+    Default: "True"
+    AllowedValues:
+      - "True"
+      - "False"
 
 Mappings: 
   RegionMap:
@@ -88,8 +94,11 @@ Mappings:
     20.1.4:
       version: '2014'
 
+Conditions:
+  CreateVMImportRole: !Equals
+    - !Ref CreateVMImportExport
+    - "True"
 
-# Conditions: 
 
 Resources: 
   AviControllerLT:
@@ -235,7 +244,6 @@ Resources:
         - Key: Name
           Value: AviController3
 
-
   AviControllerRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -251,47 +259,49 @@ Resources:
                 - ec2.amazonaws.com
                 - lambda.amazonaws.com
 
-  # VMimportRole:
-  #   Type: 'AWS::IAM::Role'
-  #   Properties:
-  #     RoleName: vmimport
-  #     Path: /
-  #     AssumeRolePolicyDocument:
-  #       Version: 2012-10-17
-  #       Statement:
-  #       - Effect: Allow
-  #         Principal:
-  #           Service: vmie.amazonaws.com
-  #         Action: sts:AssumeRole
-  #         Condition:
-  #           StringEquals:
-  #             sts:ExternalId: vmimport
+  VMimportRole:
+    Type: 'AWS::IAM::Role'
+    Condition: CreateVMImportRole
+    Properties:
+      RoleName: vmimport
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: vmie.amazonaws.com
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              sts:ExternalId: vmimport
 
-  # VMimportPolicy:
-  #   Type: 'AWS::IAM::Policy'
-  #   Properties:
-  #     PolicyName: VmimportPolicy
-  #     PolicyDocument:
-  #       Version: '2012-10-17'
-  #       Statement:
-  #       - Effect: Allow
-  #         Action:
-  #         - s3:ListBucket
-  #         - s3:GetBucketLocation
-  #         Resource: "*"
-  #       - Effect: Allow
-  #         Action:
-  #         - s3:GetObject
-  #         Resource: "*"
-  #       - Effect: Allow
-  #         Action:
-  #         - ec2:ModifySnapshotAttribute
-  #         - ec2:CopySnapshot
-  #         - ec2:RegisterImage
-  #         - ec2:Describe*
-  #         Resource: "*"
-  #     Roles:
-  #       - !Ref VMimportRole
+  VMimportPolicy:
+    Type: 'AWS::IAM::Policy'
+    Condition: CreateVMImportRole
+    Properties:
+      PolicyName: VmimportPolicy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:ListBucket
+          - s3:GetBucketLocation
+          Resource: "*"
+        - Effect: Allow
+          Action:
+          - s3:GetObject
+          Resource: "*"
+        - Effect: Allow
+          Action:
+          - ec2:ModifySnapshotAttribute
+          - ec2:CopySnapshot
+          - ec2:RegisterImage
+          - ec2:Describe*
+          Resource: "*"
+      Roles:
+        - !Ref VMimportRole
 
   AviControllerEC2Policy:
     Type: 'AWS::IAM::Policy'
@@ -299,7 +309,33 @@ Resources:
       PolicyName: AviControllerEC2Policy
       PolicyDocument:
         Statement:
-          - Sid: Stmt1450393199000
+          - Sid: Stmt1
+            Effect: Allow
+            Action:
+              - ec2:AuthorizeSecurityGroupEgress
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:DeleteSecurityGroup
+              - ec2:DeleteTags
+              - ec2:RebootInstances
+              - ec2:RevokeSecurityGroupIngress
+              - ec2:StartInstances
+              - ec2:StopInstances
+              - ec2:TerminateInstances
+              - ec2:RevokeSecurityGroupEgress
+            Resource: "*"
+            Condition:
+              StringLike: 
+                ec2:ResourceTag/AVICLOUD_UUID: "*"
+          - Sid: Stmt2
+            Effect: Allow
+            Action:
+              - ec2:DeleteSnapshot
+              - ec2:ModifySnapshotAttribute
+            Resource: "*"
+            Condition:
+              StringLike:
+                ec2:ResourceTag/AVICLOUD_UUID: "*"
+          - Sid: Stmt3
             Effect: Allow
             Action:
               - 'ec2:AllocateAddress'
@@ -378,32 +414,201 @@ Resources:
             Resource: '*'
       Roles:
         - !Ref AviControllerRole
+
+  AviControllerASGPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: AviControllerASGPolicy
+      PolicyDocument:
+        Statement:
+          - Sid: Stmt1
+            Effect: Allow
+            Action:
+              - autoscaling:DescribeAutoScalingGroups
+              - autoscaling:DescribeAutoScalingInstances
+              - autoscaling:DescribeLaunchConfigurations
+            Resource: "*"
+      Roles:
+        - !Ref AviControllerRole
+
+  AviControllerIAMPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: AviControllerIAMPolicy
+      PolicyDocument:
+        Statement:
+          - Sid: Stmt1
+            Effect: Allow
+            Action:
+              - iam:GetPolicy
+              - iam:GetPolicyVersion
+              - iam:ListPolicyVersions
+            Resource:
+              - !GetAtt AviControllerRole.Arn
+              - arn:aws:iam::*:policy/AviController*
+          - Sid: Stmt2
+            Effect: Allow
+            Action:
+              - iam:GetInstanceProfile
+              - iam:GetRole
+              - iam:GetRolePolicy
+              - iam:ListAttachedRolePolicies
+              - iam:ListRolePolicies
+            Resource:
+              - !GetAtt AviControllerInstanceProfile.Arn
+              - arn:aws:iam::*:policy/AviController*
+              - arn:aws:iam::*:role/vmimport
+              - !GetAtt AviControllerRole.Arn
+          - Sid: Stmt3
+            Effect: Allow
+            Action:
+              - iam:ListPolicies
+              - iam:ListRoles
+            Resource: "*"
+      Roles:
+        - !Ref AviControllerRole
+
+  AviControllerKMSPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: AviControllerKMSPolicy
+      PolicyDocument:
+        Statement:
+          - Sid: Stmt1
+            Effect: Allow
+            Action:
+              - kms:CreateGrant
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:GenerateDataKey
+              - kms:GenerateDataKeyWithoutPlaintext
+              - kms:ReEncryptFrom
+              - kms:ReEncryptTo
+            Resource: "arn:aws:kms:*:*:key/*"
+          - Sid: Stmt2
+            Effect: Allow
+            Action:
+              - kms:ListAliases
+              - kms:ListKeys
+            Resource: "*"
+      Roles:
+        - !Ref AviControllerRole
+
+  AviControllerR53Policy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: AviControllerR53Policy
+      PolicyDocument:
+        Statement:
+          - Sid: Stmt1
+            Effect: Allow
+            Action:
+              - route53:ChangeResourceRecordSets
+              - route53:ListResourceRecordSets
+            Resource: "arn:aws:route53:::hostedzone/*"
+          - Sid: Stmt2
+            Effect: Allow
+            Action:
+              - route53:GetChange
+              - route53:GetHostedZone
+              - route53:GetHostedZoneCount
+              - route53:ListHostedZones
+              - route53:ListHostedZonesByName
+            Resource: "*"
+      Roles:
+        - !Ref AviControllerRole
+
   AviControllerS3Policy:
     Type: 'AWS::IAM::Policy'
     Properties:
       PolicyName: AviControllerS3Policy
       PolicyDocument:
         Statement:
-          - Sid: Stmt1450394113000
+          - Sid: Stmt1
             Effect: Allow
             Action:
-              - 's3:AbortMultipartUpload'
-              - 's3:CreateBucket'
-              - 's3:DeleteBucket'
-              - 's3:DeleteObject'
-              - 's3:GetBucketLocation'
-              - 's3:GetBucketTagging'
-              - 's3:GetObject'
-              - 's3:ListAllMyBuckets'
-              - 's3:ListBucket'
-              - 's3:ListBucketMultipartUploads'
-              - 's3:ListMultipartUploadParts'
-              - 's3:PutBucketTagging'
-              - 's3:PutObject'
-            Resource:
-              - '*'
+              - s3:ListAllMyBuckets
+            Resource: "*"
+          - Sid: Stmt2
+            Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:DeleteBucket
+              - s3:GetBucketLocation
+              - s3:GetBucketTagging
+              - s3:ListBucket
+              - s3:ListBucketMultipartUploads
+              - s3:PutBucketTagging
+            Resource: "arn:aws:s3:::avi-se-*"
+          - Sid: Stmt3
+            Effect: Allow
+            Action:
+              - s3:AbortMultipartUpload
+              - s3:DeleteObject
+              - s3:ListMultipartUploadParts
+              - s3:GetObject
+              - s3:PutObject
+            Resource: "arn:aws:s3:::avi-se-*/*"
       Roles:
         - !Ref AviControllerRole
+
+  AviControllerSQSSNSPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: AviControllerSQSSNSPolicy
+      PolicyDocument:
+        Statement:
+          - Sid: Stmt1
+            Effect: Allow
+            Action:
+              - autoscaling:DeleteNotificationConfiguration
+              - autoscaling:DescribeNotificationConfigurations
+              - autoscaling:PutNotificationConfiguration
+              - autoscaling:UpdateAutoScalingGroup
+            Resource: "*"
+          - Sid: Stmt2
+            Effect: Allow
+            Action:
+              - sqs:AddPermission
+              - sqs:CreateQueue
+              - sqs:DeleteQueue
+              - sqs:DeleteMessage
+              - sqs:DeleteMessageBatch
+              - sqs:GetQueueAttributes
+              - sqs:GetQueueUrl
+              - sqs:ListQueueTags
+              - sqs:PurgeQueue
+              - sqs:ReceiveMessage
+              - sqs:SetQueueAttributes
+              - sqs:TagQueue
+              - sqs:UntagQueue
+            Resource: "arn:aws:sqs:*:*:avi-sqs-cloud-*"
+          - Sid: Stmt3
+            Effect: Allow
+            Action:
+              - sns:Subscribe
+            Resource: "arn:aws:sns:*:*:avi-asg-cloud-*"
+          - Sid: Stmt4
+            Effect: Allow
+            Action:
+              - sns:ListTopics
+              - sns:GetSubscriptionAttributes
+              - sns:Unsubscribe
+            Resource: "*"
+          - Sid: Stmt5
+            Effect: Allow
+            Action:
+              - sns:ConfirmSubscription
+              - sns:CreateTopic
+              - sns:DeleteTopic
+              - sns:GetTopicAttributes
+              - sns:ListSubscriptionsByTopic
+              - sns:Publish
+              - sns:SetTopicAttributes
+            Resource: "arn:aws:sns:*:*:avi-asg-cloud-*"
+      Roles:
+        - !Ref AviControllerRole
+
   AviControllerInstanceProfile:
     Type: 'AWS::IAM::InstanceProfile'
     Properties:
@@ -448,7 +653,6 @@ Resources:
               Service:
                 - "lambda.amazonaws.com"
       Path: /
-
 
   LambdaExecutionRoleConfigureCluster:
     Type: 'AWS::IAM::Role'
@@ -630,13 +834,10 @@ Resources:
       Nodes:
         Ctl1:
           PrivateIp: !GetAtt AviController1.PrivateIp
-          # PublicIp: !GetAtt AviController1.PublicIp
         Ctl2:
           PrivateIp: !GetAtt AviController2.PrivateIp
-          # PublicIp: !GetAtt AviController2.PublicIp
         Ctl3:
           PrivateIp: !GetAtt AviController3.PrivateIp
-          # PublicIp: !GetAtt AviController3.PublicIp
 
   ControllerSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
@@ -706,7 +907,6 @@ Resources:
           NET USER admin ${AviPassword} /ADD
           NET LOCALGROUP Administrators admin /ADD
           </powershell>
-
 
 Outputs:
   CTL1PrivateIP:
