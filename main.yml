@@ -912,13 +912,13 @@ Resources:
 
 Outputs:
   CTL1PrivateIP:
-    Description: Public IP of the Controller
+    Description: Private IP of the Controller
     Value: !GetAtt AviController1.PrivateIp
   CTL2PrivateIP:
-    Description: Public IP of the Controller
+    Description: Private IP of the Controller
     Value: !GetAtt AviController2.PrivateIp
   CTL3PrivateIP:
-    Description: Public IP of the Controller
+    Description: Private IP of the Controller
     Value: !GetAtt AviController3.PrivateIp
   BastionPublicIP:
     Description: RDP Jumphost access
