@@ -42,14 +42,14 @@ Parameters:
     Type: String
     Default: Avi123!@#
     NoEcho: True
-  S3BucketName:
-    Description: Name of the S3 bucket which contains deployment code
-    Type: String
-    Default: jcoakley-bucket
-  S3Key:
-    Description: Name of the zipfile in the S3 bucket
-    Type: String
-    Default: deploy.zip
+  # S3BucketName:
+  #   Description: Name of the S3 bucket which contains deployment code
+  #   Type: String
+  #   Default: jcoakley-bucket
+  # S3Key:
+  #   Description: Name of the zipfile in the S3 bucket
+  #   Type: String
+  #   Default: deploy.zip
   LatestWindowsImage:
     Description: Windows AMI used for bastion host.
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
@@ -71,26 +71,39 @@ Mappings:
   RegionMap:
     us-east-1:
       "2014": ami-0822ac66b62a893cc
+      "layer": 668099181075
     us-east-2:
       "2014": ami-08cf08a0ba5dcff76
+      "layer": 259788987135
     us-west-1:
       "2014": ami-0fa6c926c2fb340d3
+      "layer": 325793726646
     us-west-2:
       "2014": ami-08ecc90c68f430fc2
+      "layer": 420165488524
     eu-central-1:
       "2014": ami-030f68f6e94f00a30
+      "layer": 292169987271
     eu-west-1:
       "2014": ami-05d415fa077f74349
+      "layer": 399891621064
     eu-west-2:
       "2014": ami-09ec1ddcb679307c3
+      "layer": 142628438157
     eu-west-3:
       "2014": ami-041406d054148f645
+      "layer": 959311844005
     ap-northeast-1:
       "2014": ami-0c91bac459416082e
+      "layer": 249908578461
     ap-southeast-1:
       "2014": ami-03d56278f53a1db5c
+      "layer": 468957933125
     ap-southeast-2:
       "2014": ami-0bc337bbf06c676b3
+      "layer": 817496625479
+
+  
 
   VersionMap:
     20.1.4:
@@ -122,7 +135,7 @@ Resources:
         NetworkInterfaces:
           - Groups:
               - !Ref ControllerSecurityGroup
-            AssociatePublicIpAddress: false
+            AssociatePublicIpAddress: true
             DeviceIndex: 0
             DeleteOnTermination: true
             SubnetId: !Ref SubnetId
@@ -765,6 +778,7 @@ Resources:
                               "ErrorEquals": ["States.ALL"],
                               "IntervalSeconds": 120,
                               "MaxAttempts": 8
+                              "BackoffRate": 1
                           }
                       ],
                       "Catch": [
@@ -790,14 +804,100 @@ Resources:
     Properties:
       Description: Configures Avi Controller Cluster
       FunctionName: !Sub ConfigureCluster-${AWS::StackName}
-      Handler: lambda_function.lambda_handler
+      Handler: index.lambda_handler
       MemorySize: 128
       Role: !GetAtt LambdaExecutionRoleConfigureCluster.Arn
       Runtime: python3.6
+      Layers: 
+        - !Sub
+          - arn:aws:lambda:${AWS::Region}:${Layer}:layer:AWSLambda-Python-AWS-SDK:4
+          - { 'Layer': !FindInMap ["RegionMap", !Ref AWS::Region, "layer"] }
       Timeout: 30
       Code:
-        S3Bucket: !Ref S3BucketName
-        S3Key: !Ref S3Key
+        ZipFile: |
+          import logging
+          import os
+          import json
+          from botocore.vendored import requests
+
+          avi_password = os.environ.get('AVIPASSWORD', '')
+          api_version = os.environ.get('APIVERSION', '20.1.4')
+          headers = {
+            'x-avi-version': api_version,
+            'Content-Type': 'application/json'
+            }
+          auth = {'username': 'admin', 'password': avi_password}
+    
+          class NotReady(Exception):
+              pass
+
+          def ready_check(nodes:dict, password:str, api_version:str):
+              result = []
+              for node, ip in nodes.items():
+                  base_url = 'https://{}'.format(ip['PrivateIp'])
+                  try:
+                      with requests.Session() as session:
+                          session.post(base_url + "/login", data=auth, verify=False)
+                          if session.get(base_url + "/api/cluster", verify=False).status_code == 200:
+                              result.append(node)
+                  except:
+                      pass
+              return True if len(result) == 3 else False
+
+          def lambda_handler(event, context):
+              print("Received Event:")
+              print(event)
+              nodes = event['ResourceProperties']['Nodes']
+              base_url = 'https://{}'.format(nodes['Ctl1']['PrivateIp'])
+              data = {
+                  "nodes": [
+                      {
+                          "name": "Ctl1",
+                          "ip": {
+                              "addr": nodes['Ctl1']['PrivateIp'],
+                              "type": "V4"
+                          },
+                          "password": avi_password
+                      },
+                      {
+                          "name": "Ctl2",
+                          "ip": {
+                              "addr": nodes['Ctl2']['PrivateIp'],
+                              "type": "V4"
+                          },
+                          "password": avi_password
+                      },
+                      {
+                          "name": "Ctl3",
+                          "ip": {
+                              "addr": nodes['Ctl3']['PrivateIp'],
+                              "type": "V4"
+                          },
+                          "password": avi_password
+                      }
+                  ]
+              }
+
+              try:
+                  if ready_check(nodes, avi_password, api_version):
+                      print("Ready Check: Passed!")
+                      print("Beginning Cluster Configuration")
+                      with requests.Session() as session:
+                          session.post(base_url + '/login', data=auth, verify=False)
+                          cookie_dict = requests.utils.dict_from_cookiejar(session.cookies)
+                          headers.update({"Referer": base_url, "x-csrftoken": cookie_dict['csrftoken']})
+                          session.headers.update(headers)
+                          resp = session.put(base_url + '/api/cluster', data=json.dumps(data), verify=False, headers=session.headers)
+                          if resp.status_code == 200:
+                              return(event)
+                          else:
+                              raise NotReady
+                  else:
+                      print("Ready Check Failed. Raising NotReady Exception")
+                      raise NotReady
+              except Exception:
+                  print("Caught an exception")
+                  raise NotReady        
       Environment:
         Variables:
           AVIPASSWORD: !Ref AviPassword
