@@ -4,7 +4,6 @@ This template and Lambda package will deploy an Avi Vantage 20.1.4 3-node cluste
 ## Pre-requsites
 - You must have an SSH keypair in the region you wish to deploy into.
 - The Avi Vantage product should be scribed to in the [AWS Marketplace](https://aws.amazon.com/marketplace/pp/B01ICD3R7E).
-- The deploy.zip archive must be present in an S3 bucket in the region you wish to deploy into.
 
 ## Notes
 - Deployment can take up to 30 minutes
