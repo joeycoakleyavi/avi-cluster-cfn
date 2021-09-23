@@ -30,6 +30,8 @@ Parameters:
     Default: 20.1.4
     AllowedValues:
       - 20.1.4
+      - 21.1.1
+      - 18.2.10
     ConstraintDescription: Must be a valid Avi Vantage version
   VpcId:
     Description: The VPC in which the controller cluster will be deployed
@@ -50,15 +52,15 @@ Parameters:
   #   Description: Name of the zipfile in the S3 bucket
   #   Type: String
   #   Default: deploy.zip
-  LatestWindowsImage:
-    Description: Windows AMI used for bastion host.
-    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
-    Default: '/aws/service/ami-windows-latest/Windows_Server-2016-English-Full-Base'
-  AllowedRDPAccess:
-    Description: CIDR that is authorized to RDP into Bastion
-    Type: String
-    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|1[0-9]|2[0-9]|3[0-2]))$
-    ConstraintDescription: CIDR block parameter must be in the form x.x.x.x/0-32.
+  # LatestWindowsImage:
+  #   Description: Windows AMI used for bastion host.
+  #   Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+  #   Default: '/aws/service/ami-windows-latest/Windows_Server-2016-English-Full-Base'
+  # AllowedRDPAccess:
+  #   Description: CIDR that is authorized to RDP into Bastion
+  #   Type: String
+  #   AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|1[0-9]|2[0-9]|3[0-2]))$
+  #   ConstraintDescription: CIDR block parameter must be in the form x.x.x.x/0-32.
   CreateVMImportExport:
     Description: Should this template create the VMImport Role? Select True if this is the first Avi AWS deployment.
     Type: String
@@ -66,11 +68,14 @@ Parameters:
     AllowedValues:
       - "True"
       - "False"
+  
 
 Mappings: 
   RegionMap:
     us-east-1:
       "2014": ami-0822ac66b62a893cc
+      "2111": ami-010074db16c05a098
+      "18210": ami-006da6666239f678b
       "layer": 668099181075
     us-east-2:
       "2014": ami-08cf08a0ba5dcff76
@@ -108,6 +113,10 @@ Mappings:
   VersionMap:
     20.1.4:
       version: '2014'
+    21.1.1:
+      version: '2111'
+    18.2.10:
+      version: '18210'
 
 Conditions:
   CreateVMImportRole: !Equals
@@ -673,7 +682,7 @@ Resources:
     Type: 'AWS::IAM::Role'
     Properties:
       ManagedPolicyArns: [
-        arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
       ]
       AssumeRolePolicyDocument:
         Statement:
@@ -721,8 +730,8 @@ Resources:
               sfn_client = boto3.client('stepfunctions')
               try:
                   if event['RequestType'] == 'Delete':
-                    print("Delete Event Requested")
-                    cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      print("Delete Event Requested")
+                      return(cfnresponse.send(event, context, cfnresponse.SUCCESS, {}))     
                   response = sfn_client.start_execution(stateMachineArn=statemachineARN,input=(json.dumps(event)))
                   sfn_arn = response.get('executionArn')
                   print(sfn_arn)
@@ -733,7 +742,7 @@ Resources:
                   response=cfnresponse.send(event, context, cfnresponse.FAILED, responseData)
                   return(response)
               return(sfn_arn)
-      Runtime: "python2.7"
+      Runtime: "python3.6"
       Timeout: 25
     
   NotifyCFN:
@@ -758,7 +767,7 @@ Resources:
                       cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
               except Exception:
                   cfnresponse.send(event, context, cfnresponse.FAILED, {})
-      Runtime: "python2.7"
+      Runtime: "python3.6"
       Timeout: 25
 
   StateMachine:
@@ -777,7 +786,7 @@ Resources:
                           {
                               "ErrorEquals": ["States.ALL"],
                               "IntervalSeconds": 120,
-                              "MaxAttempts": 8
+                              "MaxAttempts": 8,
                               "BackoffRate": 1
                           }
                       ],
@@ -979,36 +988,39 @@ Resources:
           ToPort: 443
           CidrIp: 0.0.0.0/0
 
-  BastionSecurityGroup:
-    Type: 'AWS::EC2::SecurityGroup'
-    Properties:
-      GroupDescription: Enable SSH access via port 22
-      VpcId: !Ref VpcId
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 3389
-          ToPort: 3389
-          CidrIp: !Ref AllowedRDPAccess
 
-  BastionHost:
-    Type: AWS::EC2::Instance
-    Properties:
-      ImageId: !Ref LatestWindowsImage
-      InstanceType: t2.micro
-      KeyName: !Ref KeyName
-      NetworkInterfaces:
-        - GroupSet:
-            - !Ref BastionSecurityGroup
-          AssociatePublicIpAddress: true
-          DeviceIndex: "0"
-          DeleteOnTermination: true
-          SubnetId: !Ref SubnetId
-      UserData: 
-        Fn::Base64: !Sub |
-          <powershell>
-          NET USER admin ${AviPassword} /ADD
-          NET LOCALGROUP Administrators admin /ADD
-          </powershell>
+  # BastionSecurityGroup:
+  #   Type: 'AWS::EC2::SecurityGroup'
+  #   Properties:
+  #     GroupDescription: Enable SSH access via port 22
+  #     VpcId: !Ref VpcId
+  #     SecurityGroupIngress:
+  #       - IpProtocol: tcp
+  #         FromPort: 3389
+  #         ToPort: 3389
+  #         CidrIp: !Ref AllowedRDPAccess
+
+  # BastionHost:
+  #   Type: AWS::EC2::Instance
+  #   Properties:
+  #     ImageId: !Ref LatestWindowsImage
+  #     InstanceType: t2.micro
+  #     KeyName: !Ref KeyName
+  #     NetworkInterfaces:
+  #       - GroupSet:
+  #           - !Ref BastionSecurityGroup
+  #         AssociatePublicIpAddress: true
+  #         DeviceIndex: "0"
+  #         DeleteOnTermination: true
+  #         SubnetId: !Ref SubnetId
+  #     UserData: 
+  #       Fn::Base64: !Sub |
+  #         <powershell>
+  #         NET USER admin ${AviPassword} /ADD
+  #         NET LOCALGROUP Administrators admin /ADD
+  #         </powershell>
+
+  
 
 Outputs:
   CTL1PrivateIP:
@@ -1017,12 +1029,9 @@ Outputs:
   CTL2PrivateIP:
     Description: Private IP of the Controller
     Value: !GetAtt AviController2.PrivateIp
-  CTL3PrivateIP:
-    Description: Private IP of the Controller
-    Value: !GetAtt AviController3.PrivateIp
-  BastionPublicIP:
-    Description: RDP Jumphost access
-    Value: !GetAtt BastionHost.PublicIp
+  # CTL3PrivateIP:
+  #   Description: Private IP of the Controller
+  #   Value: !GetAtt AviController3.PrivateIp
   # CTL1PublicIP:
   #   Description: Public IP of the Controller
   #   Value: !GetAtt AviController1.PublicIp
