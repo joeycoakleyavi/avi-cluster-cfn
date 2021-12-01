@@ -1,10 +1,6 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: CloudFormation Template to Create an Avi Cluster
 Parameters:
-  KeyName:
-    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
-    Type: 'AWS::EC2::KeyPair::KeyName'
-    ConstraintDescription: must be the name of an existing EC2 KeyPair.
   InstanceType:
     Description: Avi Controller instance type
     Type: String
@@ -25,13 +21,22 @@ Parameters:
       - c4.8xlarge
     ConstraintDescription: must be a valid EC2 instance type.
   AviVantageVersion:
-    Description: The version of Avi Vantage
+    Description: Provide the Version of Avi you would like to install
     Type: String
-    Default: 20.1.4
     AllowedValues:
-      - 20.1.4
+      - Latest 21.x
+      - Latest 20.x
+      - Latest 18.x
       - 21.1.1
-      - 18.2.10
+      - 21.1.2
+      - 20.1.1
+      - 20.1.2
+      - 20.1.3
+      - 20.1.4
+      - 20.1.5
+      - 20.1.6
+      - 20.1.7
+      - 18.2.13
     ConstraintDescription: Must be a valid Avi Vantage version
   VpcId:
     Description: The VPC in which the controller cluster will be deployed
@@ -44,23 +49,6 @@ Parameters:
     Type: String
     Default: Avi123!@#
     NoEcho: True
-  # S3BucketName:
-  #   Description: Name of the S3 bucket which contains deployment code
-  #   Type: String
-  #   Default: jcoakley-bucket
-  # S3Key:
-  #   Description: Name of the zipfile in the S3 bucket
-  #   Type: String
-  #   Default: deploy.zip
-  # LatestWindowsImage:
-  #   Description: Windows AMI used for bastion host.
-  #   Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
-  #   Default: '/aws/service/ami-windows-latest/Windows_Server-2016-English-Full-Base'
-  # AllowedRDPAccess:
-  #   Description: CIDR that is authorized to RDP into Bastion
-  #   Type: String
-  #   AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|1[0-9]|2[0-9]|3[0-2]))$
-  #   ConstraintDescription: CIDR block parameter must be in the form x.x.x.x/0-32.
   CreateVMImportExport:
     Description: Should this template create the VMImport Role? Select True if this is the first Avi AWS deployment.
     Type: String
@@ -68,55 +56,32 @@ Parameters:
     AllowedValues:
       - "True"
       - "False"
-  
 
 Mappings: 
   RegionMap:
     us-east-1:
-      "2014": ami-0822ac66b62a893cc
-      "2111": ami-010074db16c05a098
-      "18210": ami-006da6666239f678b
       "layer": 668099181075
     us-east-2:
-      "2014": ami-08cf08a0ba5dcff76
       "layer": 259788987135
     us-west-1:
-      "2014": ami-0fa6c926c2fb340d3
       "layer": 325793726646
     us-west-2:
-      "2014": ami-08ecc90c68f430fc2
       "layer": 420165488524
     eu-central-1:
-      "2014": ami-030f68f6e94f00a30
       "layer": 292169987271
     eu-west-1:
-      "2014": ami-05d415fa077f74349
       "layer": 399891621064
     eu-west-2:
-      "2014": ami-09ec1ddcb679307c3
       "layer": 142628438157
     eu-west-3:
-      "2014": ami-041406d054148f645
       "layer": 959311844005
     ap-northeast-1:
-      "2014": ami-0c91bac459416082e
       "layer": 249908578461
     ap-southeast-1:
-      "2014": ami-03d56278f53a1db5c
       "layer": 468957933125
     ap-southeast-2:
-      "2014": ami-0bc337bbf06c676b3
       "layer": 817496625479
 
-  
-
-  VersionMap:
-    20.1.4:
-      version: '2014'
-    21.1.1:
-      version: '2111'
-    18.2.10:
-      version: '18210'
 
 Conditions:
   CreateVMImportRole: !Equals
@@ -132,14 +97,7 @@ Resources:
       LaunchTemplateData: 
         IamInstanceProfile: 
           Arn: !GetAtt AviControllerInstanceProfile.Arn
-        ImageId: !FindInMap
-          - RegionMap
-          - !Ref 'AWS::Region'
-          - !FindInMap
-            - VersionMap
-            - !Ref AviVantageVersion
-            - version
-        KeyName: !Ref KeyName
+        ImageId: !GetAtt AMIInfo.Ami
         InstanceType: !Ref InstanceType
         NetworkInterfaces:
           - Groups:
@@ -988,38 +946,171 @@ Resources:
           ToPort: 443
           CidrIp: 0.0.0.0/0
 
+  LambdaExecutionPolicyAmiLookup:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Path: "/"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ec2
+            Effect: Allow
+            Action: [
+              'ec2:DescribeImages',
+              'ec2:RunInstances'
+            ]
+            Resource: '*'
+          - Sid: log
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
 
-  # BastionSecurityGroup:
-  #   Type: 'AWS::EC2::SecurityGroup'
-  #   Properties:
-  #     GroupDescription: Enable SSH access via port 22
-  #     VpcId: !Ref VpcId
-  #     SecurityGroupIngress:
-  #       - IpProtocol: tcp
-  #         FromPort: 3389
-  #         ToPort: 3389
-  #         CidrIp: !Ref AllowedRDPAccess
+  LambdaExecutionRoleAmiLookup:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      ManagedPolicyArns: [
+        !Ref LambdaExecutionPolicyAmiLookup
+      ]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+      Path: /
 
-  # BastionHost:
-  #   Type: AWS::EC2::Instance
-  #   Properties:
-  #     ImageId: !Ref LatestWindowsImage
-  #     InstanceType: t2.micro
-  #     KeyName: !Ref KeyName
-  #     NetworkInterfaces:
-  #       - GroupSet:
-  #           - !Ref BastionSecurityGroup
-  #         AssociatePublicIpAddress: true
-  #         DeviceIndex: "0"
-  #         DeleteOnTermination: true
-  #         SubnetId: !Ref SubnetId
-  #     UserData: 
-  #       Fn::Base64: !Sub |
-  #         <powershell>
-  #         NET USER admin ${AviPassword} /ADD
-  #         NET LOCALGROUP Administrators admin /ADD
-  #         </powershell>
+  LambdaAMILookup:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: AMI Lookup Lambda Function
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRoleAmiLookup.Arn
+      Runtime: python3.6
+      Timeout: 5
+      Code:
+        ZipFile: |
+          #!/usr/bin/python
+          import boto3
+          import botocore.exceptions
+          import re
+          import cfnresponse
 
+          ec2 = boto3.client('ec2')
+
+          class AmiNotFound(Exception):
+              pass
+          class OptInRequired(Exception):
+              pass
+
+          def get_avi_version(ami):
+              '''
+              Pulls Avi Version out of an AMI Description
+              '''
+              regex = re.compile('\d+\.\d+\.\d+', re.IGNORECASE)
+              m = regex.search(ami['Description'])
+              return m.group() if m else None
+
+          def get_latest_ami_by_major_version(major_version, image_list):
+              '''
+              Get the latest version of a major release. I.E. if 20.x is specified and 20.1.1 - 20.1.6
+              are available, choose 20.1.6
+
+              Acceptable values as of 12/2021: Latest 18.x, Latest 20.x, Latest 21.x
+              '''
+              candidate_image = ""
+              major_version_num = major_version.split(' ')[1].split('.')[0]
+
+              for image in image_list:
+                  version = get_avi_version(image)
+                  if version and version.startswith(major_version_num):
+                      if not candidate_image:
+                          candidate_image = image
+                      elif version > get_avi_version(candidate_image):
+                          candidate_image = image
+                      else:
+                          pass
+
+              if not candidate_image:
+                  raise AmiNotFound("No AMI could be found with the specified parameters")
+
+              return candidate_image['ImageId']
+
+          def get_ami_by_version_number(version_number, image_list):
+              for image in image_list:
+                  version = get_avi_version(image)
+                  if version and version_number in version:
+                      return image['ImageId']
+              raise AmiNotFound("No AMI could be found with the specified parameters")
+
+          def test_ami_permissions(ami, event, context):
+              try:
+                  response = ec2.run_instances(
+                      ImageId=ami,
+                      InstanceType='m5.2xlarge',
+                      DryRun=True,
+                      MaxCount=1,
+                      MinCount=1
+                  )
+              except botocore.exceptions.ClientError as e:
+                  if e.response['Error'].get('Code') == 'DryRunOperation':
+                      pass
+                  elif e.response['Error'].get('Code') == 'OptInRequired':
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': 'Product is not subscribed to in the AWS Marketplace.'})
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': 'Unknown exception when testing AMI permissions'})
+
+          response = ec2.describe_images(
+              Filters=[
+                  {
+                      "Name": "product-code",
+                      "Values": [
+                          "a9e7i60gidrc5x9nd7z3qyjj5"
+                      ]
+                  },
+                  {
+                      "Name": "state",
+                      "Values": [
+                          "available"
+                          ]
+                  }
+              ]
+          )
+          images = response['Images']
+
+          def lambda_handler(event, context):
+              requested_image = event['ResourceProperties']['ImageRequested']
+              responseData = {}
+
+              try:
+                  if event['RequestType'] == 'Delete':
+                      print('Delete Event Requested')
+                      return(cfnresponse.send(event, context, cfnresponse.SUCCESS, {}))
+
+                  if "Latest" in requested_image:
+                      ami = get_latest_ami_by_major_version(requested_image, images)
+                  else:
+                      ami = get_ami_by_version_number(requested_image, images)
+                  responseData['Ami'] = ami
+                  
+              except Exception:
+                  responseData = {}
+                  responseData['Error'] = 'Execution error when performing AMI lookup. Please check logs'
+                  response = cfnresponse.send(event, context, cfnresponse.FAILED, responseData)
+              
+              test_ami_permissions(ami, event, context)
+              
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
+
+  AMIInfo:
+    Type: Custom::AMIInfo
+    Properties:
+      ServiceToken: !GetAtt LambdaAMILookup.Arn
+      ImageRequested: !Ref AviVantageVersion
   
 
 Outputs:
@@ -1029,15 +1120,18 @@ Outputs:
   CTL2PrivateIP:
     Description: Private IP of the Controller
     Value: !GetAtt AviController2.PrivateIp
-  # CTL3PrivateIP:
-  #   Description: Private IP of the Controller
-  #   Value: !GetAtt AviController3.PrivateIp
-  # CTL1PublicIP:
-  #   Description: Public IP of the Controller
-  #   Value: !GetAtt AviController1.PublicIp
-  # CTL2PublicIP:
-  #   Description: Public IP of the Controller
-  #   Value: !GetAtt AviController2.PublicIp
-  # CTL3PublicIP:
-  #   Description: Public IP of the Controller
-  #   Value: !GetAtt AviController3.PublicIp
+  CTL3PrivateIP:
+    Description: Private IP of the Controller
+    Value: !GetAtt AviController3.PrivateIp
+  CTL1PublicIP:
+    Description: Public IP of the Controller
+    Value: !GetAtt AviController1.PublicIp
+  CTL2PublicIP:
+    Description: Public IP of the Controller
+    Value: !GetAtt AviController2.PublicIp
+  CTL3PublicIP:
+    Description: Public IP of the Controller
+    Value: !GetAtt AviController3.PublicIp
+  AMI:
+    Description: AMI Returned from Lambda
+    Value: !GetAtt AMIInfo.Ami
